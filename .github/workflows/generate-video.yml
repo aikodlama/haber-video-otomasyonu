@@ -1,0 +1,138 @@
+name: Generate News Videos
+
+on:
+  workflow_dispatch:
+    inputs:
+      news_id:
+        description: 'Haber ID'
+        required: true
+        type: string
+      title:
+        description: 'Haber Başlığı'
+        required: true
+        type: string
+      description:
+        description: 'Haber Açıklaması'
+        required: true
+        type: string
+      image_url:
+        description: 'Haber Görsel URL'
+        required: true
+        type: string
+      news_url:
+        description: 'Haber URL'
+        required: true
+        type: string
+
+jobs:
+  generate-video:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm install remotion @remotion/cli @remotion/player
+          npm install puppeteer
+
+      - name: Create video composition
+        run: |
+          mkdir -p src
+          cat > src/NewsVideo.jsx << 'EOF'
+          import { AbsoluteFill, staticFile, useVideoConfig, Img } from 'remotion';
+          import { useEffect, useState } from 'react';
+
+          export const NewsVideo = ({ title, description, imageUrl }) => {
+            const { width, height, fps, durationInFrames } = useVideoConfig();
+            
+            return (
+              <AbsoluteFill style={{ backgroundColor: '#1a1a2e' }}>
+                <AbsoluteFill style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '60px',
+                  color: 'white',
+                  fontFamily: 'Arial, sans-serif'
+                }}>
+                  {imageUrl && (
+                    <Img 
+                      src={imageUrl} 
+                      style={{
+                        width: '80%',
+                        maxHeight: '50%',
+                        objectFit: 'cover',
+                        borderRadius: '12px',
+                        marginBottom: '40px'
+                      }}
+                    />
+                  )}
+                  <h1 style={{
+                    fontSize: '48px',
+                    textAlign: 'center',
+                    marginBottom: '30px',
+                    textShadow: '2px 2px 4px rgba(0,0,0,0.5)'
+                  }}>
+                    {title}
+                  </h1>
+                  <p style={{
+                    fontSize: '28px',
+                    textAlign: 'center',
+                    lineHeight: '1.5',
+                    opacity: 0.9
+                  }}>
+                    {description}
+                  </p>
+                </AbsoluteFill>
+              </AbsoluteFill>
+            );
+          };
+          EOF
+
+      - name: Create Remotion config
+        run: |
+          cat > remotion.config.js << 'EOF'
+          import { Config } from '@remotion/cli/config';
+
+          Config.setVideoImageFormat('jpeg');
+          Config.setOverwriteOutput(true);
+          EOF
+
+      - name: Create entry point
+        run: |
+          cat > src/index.js << 'EOF'
+          import { registerRoot } from 'remotion';
+          import { NewsVideo } from './NewsVideo';
+
+          registerRoot(NewsVideo);
+          EOF
+
+      - name: Generate video
+        run: |
+          npx remotion render src/index.js NewsVideo out/news_video_${{ github.event.inputs.news_id }}.mp4 \
+            --props='{"title":"${{ github.event.inputs.title }}","description":"${{ github.event.inputs.description }}","imageUrl":"${{ github.event.inputs.image_url }}"}' \
+            --duration=150 \
+            --fps=30 \
+            --width=1920 \
+            --height=1080
+
+      - name: Upload video artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-video-${{ github.event.inputs.news_id }}
+          path: out/news_video_${{ github.event.inputs.news_id }}.mp4
+          retention-days: 7
+
+      - name: Save video info
+        run: |
+          echo "Video generated for news ID: ${{ github.event.inputs.news_id }}" >> videos_generated.txt
+          echo "Title: ${{ github.event.inputs.title }}" >> videos_generated.txt
+          echo "URL: ${{ github.event.inputs.news_url }}" >> videos_generated.txt
+          echo "---" >> videos_generated.txt
