@@ -31,97 +31,38 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install dependencies
+      - name: Install ffmpeg and ImageMagick
         run: |
-          npm install remotion @remotion/cli @remotion/player
-          npm install puppeteer
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg imagemagick
 
-      - name: Create video composition
+      - name: Download news image
         run: |
-          mkdir -p src
-          cat > src/NewsVideo.jsx << 'EOF'
-          import { AbsoluteFill, staticFile, useVideoConfig, Img } from 'remotion';
-          import { useEffect, useState } from 'react';
+          mkdir -p out
+          curl -L -o out/news_image.jpg "${{ github.event.inputs.image_url }}" ||             curl -L -o out/news_image.jpg "https://cdnassets.aa.com.tr/assets/images/aalogomin.png"
 
-          export const NewsVideo = ({ title, description, imageUrl }) => {
-            const { width, height, fps, durationInFrames } = useVideoConfig();
-            
-            return (
-              <AbsoluteFill style={{ backgroundColor: '#1a1a2e' }}>
-                <AbsoluteFill style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '60px',
-                  color: 'white',
-                  fontFamily: 'Arial, sans-serif'
-                }}>
-                  {imageUrl && (
-                    <Img 
-                      src={imageUrl} 
-                      style={{
-                        width: '80%',
-                        maxHeight: '50%',
-                        objectFit: 'cover',
-                        borderRadius: '12px',
-                        marginBottom: '40px'
-                      }}
-                    />
-                  )}
-                  <h1 style={{
-                    fontSize: '48px',
-                    textAlign: 'center',
-                    marginBottom: '30px',
-                    textShadow: '2px 2px 4px rgba(0,0,0,0.5)'
-                  }}>
-                    {title}
-                  </h1>
-                  <p style={{
-                    fontSize: '28px',
-                    textAlign: 'center',
-                    lineHeight: '1.5',
-                    opacity: 0.9
-                  }}>
-                    {description}
-                  </p>
-                </AbsoluteFill>
-              </AbsoluteFill>
-            );
-          };
-          EOF
-
-      - name: Create Remotion config
+      - name: Create video frames
         run: |
-          cat > remotion.config.js << 'EOF'
-          import { Config } from '@remotion/cli/config';
+          mkdir -p frames
+          
+          # Create title slide
+          convert -size 1920x1080 xc:'#1a1a2e'             -gravity center             -fill white             -font Arial             -pointsize 48             -annotate +0+0 "${{ github.event.inputs.title }}"             frames/frame_001.jpg
+          
+          # Create description slide
+          convert -size 1920x1080 xc:'#16213e'             -gravity center             -fill white             -font Arial             -pointsize 32             -annotate +0+0 "${{ github.event.inputs.description }}"             frames/frame_002.jpg
+          
+          # Copy news image as frame
+          cp out/news_image.jpg frames/frame_003.jpg
+          
+          # Duplicate frames for 5 second duration each at 30fps
+          for i in $(seq -w 1 150); do
+            frame_num=$(( (i - 1) / 50 + 1 ))
+            cp frames/frame_$(printf "%03d" $frame_num).jpg frames/out_$(printf "%04d" $i).jpg
+          done
 
-          Config.setVideoImageFormat('jpeg');
-          Config.setOverwriteOutput(true);
-          EOF
-
-      - name: Create entry point
+      - name: Generate video with ffmpeg
         run: |
-          cat > src/index.js << 'EOF'
-          import { registerRoot } from 'remotion';
-          import { NewsVideo } from './NewsVideo';
-
-          registerRoot(NewsVideo);
-          EOF
-
-      - name: Generate video
-        run: |
-          npx remotion render src/index.js NewsVideo out/news_video_${{ github.event.inputs.news_id }}.mp4 \
-            --props='{"title":"${{ github.event.inputs.title }}","description":"${{ github.event.inputs.description }}","imageUrl":"${{ github.event.inputs.image_url }}"}' \
-            --duration=150 \
-            --fps=30 \
-            --width=1920 \
-            --height=1080
+          ffmpeg -framerate 30 -i frames/out_%04d.jpg             -c:v libx264 -pix_fmt yuv420p -crf 23             -movflags +faststart             out/news_video_${{ github.event.inputs.news_id }}.mp4
 
       - name: Upload video artifact
         uses: actions/upload-artifact@v4
@@ -132,7 +73,20 @@ jobs:
 
       - name: Save video info
         run: |
-          echo "Video generated for news ID: ${{ github.event.inputs.news_id }}" >> videos_generated.txt
-          echo "Title: ${{ github.event.inputs.title }}" >> videos_generated.txt
-          echo "URL: ${{ github.event.inputs.news_url }}" >> videos_generated.txt
-          echo "---" >> videos_generated.txt
+          cat > out/video_info_${{ github.event.inputs.news_id }}.json << EOF
+          {
+            "news_id": "${{ github.event.inputs.news_id }}",
+            "title": "${{ github.event.inputs.title }}",
+            "news_url": "${{ github.event.inputs.news_url }}",
+            "image_url": "${{ github.event.inputs.image_url }}",
+            "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "video_file": "news_video_${{ github.event.inputs.news_id }}.mp4"
+          }
+          EOF
+
+      - name: Upload video info
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-info-${{ github.event.inputs.news_id }}
+          path: out/video_info_${{ github.event.inputs.news_id }}.json
+          retention-days: 7
