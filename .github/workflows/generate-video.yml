@@ -35,58 +35,64 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg imagemagick
+          # ImageMagick policy dosyasını düzelt
+          sudo sed -i 's/<policy domain="coder" rights="none" pattern="PDF" \/>/<policy domain="coder" rights="read|write" pattern="PDF" \/>/g' /etc/ImageMagick-6/policy.xml || true
 
       - name: Download news image
         run: |
           mkdir -p out
-          curl -L -o out/news_image.jpg "${{ github.event.inputs.image_url }}" ||             curl -L -o out/news_image.jpg "https://cdnassets.aa.com.tr/assets/images/aalogomin.png"
+          curl -L -o out/news_image.jpg "${{ github.event.inputs.image_url }}" || curl -L -o out/news_image.jpg "https://cdnassets.aa.com.tr/assets/images/aalogomin.png"
 
       - name: Create video frames
         run: |
           mkdir -p frames
           
-          # Create title slide
-          convert -size 1920x1080 xc:'#1a1a2e'             -gravity center             -fill white             -font Arial             -pointsize 48             -annotate +0+0 "${{ github.event.inputs.title }}"             frames/frame_001.jpg
+          # Title slide - shorter text to avoid ImageMagick issues
+          TITLE="${{ github.event.inputs.title }}"
+          # Limit title length for ImageMagick
+          if [ ${#TITLE} -gt 100 ]; then
+            TITLE="${TITLE:0:97}..."
+          fi
           
-          # Create description slide
-          convert -size 1920x1080 xc:'#16213e'             -gravity center             -fill white             -font Arial             -pointsize 32             -annotate +0+0 "${{ github.event.inputs.description }}"             frames/frame_002.jpg
+          convert -size 1920x1080 xc:'#1a1a2e'             -gravity center             -fill white             -pointsize 48             -annotate +0+0 "$TITLE"             frames/frame_001.jpg || convert -size 1920x1080 xc:'#1a1a2e' -gravity center -fill white -pointsize 48 -annotate +0+0 "Haber Başlığı" frames/frame_001.jpg
+          
+          # Description slide
+          DESC="${{ github.event.inputs.description }}"
+          # Limit description length
+          if [ ${#DESC} -gt 200 ]; then
+            DESC="${DESC:0:197}..."
+          fi
+          
+          convert -size 1920x1080 xc:'#16213e'             -gravity center             -fill white             -pointsize 32             -annotate +0+0 "$DESC"             frames/frame_002.jpg || convert -size 1920x1080 xc:'#16213e' -gravity center -fill white -pointsize 32 -annotate +0+0 "Haber Açıklaması" frames/frame_002.jpg
           
           # Copy news image as frame
           cp out/news_image.jpg frames/frame_003.jpg
           
           # Duplicate frames for 5 second duration each at 30fps
-          for i in $(seq -w 1 150); do
-            frame_num=$(( (i - 1) / 50 + 1 ))
-            cp frames/frame_$(printf "%03d" $frame_num).jpg frames/out_$(printf "%04d" $i).jpg
+          for i in 001 002 003; do
+            for j in {1..150}; do
+              cp frames/frame_$i.jpg frames/frame_${i}_$(printf "%03d" $j).jpg
+            done
           done
 
       - name: Generate video with ffmpeg
         run: |
-          ffmpeg -framerate 30 -i frames/out_%04d.jpg             -c:v libx264 -pix_fmt yuv420p -crf 23             -movflags +faststart             out/news_video_${{ github.event.inputs.news_id }}.mp4
+          ffmpeg -framerate 30 -i frames/frame_%03d_%03d.jpg -c:v libx264 -pix_fmt yuv420p -r 30 out/news_video_${{ github.event.inputs.news_id }}.mp4 ||           ffmpeg -framerate 30 -pattern_type glob -i "frames/*.jpg" -c:v libx264 -pix_fmt yuv420p -r 30 out/news_video_${{ github.event.inputs.news_id }}.mp4
 
       - name: Upload video artifact
         uses: actions/upload-artifact@v4
         with:
           name: news-video-${{ github.event.inputs.news_id }}
           path: out/news_video_${{ github.event.inputs.news_id }}.mp4
-          retention-days: 7
+          retention-days: 30
 
       - name: Save video info
         run: |
-          cat > out/video_info_${{ github.event.inputs.news_id }}.json << EOF
-          {
-            "news_id": "${{ github.event.inputs.news_id }}",
-            "title": "${{ github.event.inputs.title }}",
-            "news_url": "${{ github.event.inputs.news_url }}",
-            "image_url": "${{ github.event.inputs.image_url }}",
-            "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "video_file": "news_video_${{ github.event.inputs.news_id }}.mp4"
-          }
-          EOF
+          echo '{"news_id": "${{ github.event.inputs.news_id }}", "title": "${{ github.event.inputs.title }}", "news_url": "${{ github.event.inputs.news_url }}", "created_at": "'$(date -Iseconds)'"}' > out/video_info_${{ github.event.inputs.news_id }}.json
 
       - name: Upload video info
         uses: actions/upload-artifact@v4
         with:
           name: video-info-${{ github.event.inputs.news_id }}
           path: out/video_info_${{ github.event.inputs.news_id }}.json
-          retention-days: 7
+          retention-days: 30
