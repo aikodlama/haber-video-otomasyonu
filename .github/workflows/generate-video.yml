@@ -31,53 +31,79 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install ffmpeg and ImageMagick
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
         run: |
+          pip install pillow requests
           sudo apt-get update
-          sudo apt-get install -y ffmpeg imagemagick
-          # ImageMagick policy dosyasını düzelt
-          sudo sed -i 's/<policy domain="coder" rights="none" pattern="PDF" \/>/<policy domain="coder" rights="read|write" pattern="PDF" \/>/g' /etc/ImageMagick-6/policy.xml || true
+          sudo apt-get install -y ffmpeg
 
       - name: Download news image
         run: |
           mkdir -p out
           curl -L -o out/news_image.jpg "${{ github.event.inputs.image_url }}" || curl -L -o out/news_image.jpg "https://cdnassets.aa.com.tr/assets/images/aalogomin.png"
 
-      - name: Create video frames
+      - name: Create video frames with Python
         run: |
           mkdir -p frames
+          python3 << 'EOF'
+          from PIL import Image, ImageDraw, ImageFont
+          import textwrap
+          import os
+
+          # Get inputs
+          title = """${{ github.event.inputs.title }}"""
+          description = """${{ github.event.inputs.description }}"""
           
-          # Title slide - shorter text to avoid ImageMagick issues
-          TITLE="${{ github.event.inputs.title }}"
-          # Limit title length for ImageMagick
-          if [ ${#TITLE} -gt 100 ]; then
-            TITLE="${TITLE:0:97}..."
-          fi
+          # Truncate long text
+          if len(title) > 100:
+              title = title[:97] + "..."
+          if len(description) > 200:
+              description = description[:197] + "..."
+
+          # Create title frame
+          img = Image.new('RGB', (1920, 1080), color='#1a1a2e')
+          draw = ImageDraw.Draw(img)
           
-          convert -size 1920x1080 xc:'#1a1a2e'             -gravity center             -fill white             -pointsize 48             -annotate +0+0 "$TITLE"             frames/frame_001.jpg || convert -size 1920x1080 xc:'#1a1a2e' -gravity center -fill white -pointsize 48 -annotate +0+0 "Haber Başlığı" frames/frame_001.jpg
+          # Use default font
+          try:
+              font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+              font_desc = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 32)
+          except:
+              font_title = ImageFont.load_default()
+              font_desc = ImageFont.load_default()
+
+          # Wrap and draw title
+          wrapped_title = textwrap.fill(title, width=40)
+          draw.text((960, 540), wrapped_title, fill='white', font=font_title, anchor='mm', align='center')
+          img.save('frames/frame_001.jpg')
+
+          # Create description frame
+          img2 = Image.new('RGB', (1920, 1080), color='#16213e')
+          draw2 = ImageDraw.Draw(img2)
+          wrapped_desc = textwrap.fill(description, width=50)
+          draw2.text((960, 540), wrapped_desc, fill='white', font=font_desc, anchor='mm', align='center')
+          img2.save('frames/frame_002.jpg')
           
-          # Description slide
-          DESC="${{ github.event.inputs.description }}"
-          # Limit description length
-          if [ ${#DESC} -gt 200 ]; then
-            DESC="${DESC:0:197}..."
-          fi
+          print("Frames created successfully")
+          EOF
           
-          convert -size 1920x1080 xc:'#16213e'             -gravity center             -fill white             -pointsize 32             -annotate +0+0 "$DESC"             frames/frame_002.jpg || convert -size 1920x1080 xc:'#16213e' -gravity center -fill white -pointsize 32 -annotate +0+0 "Haber Açıklaması" frames/frame_002.jpg
-          
-          # Copy news image as frame
+          # Copy news image as frame 3
           cp out/news_image.jpg frames/frame_003.jpg
           
-          # Duplicate frames for 5 second duration each at 30fps
-          for i in 001 002 003; do
-            for j in {1..150}; do
-              cp frames/frame_$i.jpg frames/frame_${i}_$(printf "%03d" $j).jpg
-            done
+          # Create duplicate frames for 5 seconds each at 30fps (150 frames each)
+          for frame_num in ["001", "002", "003"]:
+              for i in range(1, 151):
+                  cp frames/frame_${frame_num}.jpg frames/frame_${frame_num}_$(printf "%03d" $i).jpg
           done
 
       - name: Generate video with ffmpeg
         run: |
-          ffmpeg -framerate 30 -i frames/frame_%03d_%03d.jpg -c:v libx264 -pix_fmt yuv420p -r 30 out/news_video_${{ github.event.inputs.news_id }}.mp4 ||           ffmpeg -framerate 30 -pattern_type glob -i "frames/*.jpg" -c:v libx264 -pix_fmt yuv420p -r 30 out/news_video_${{ github.event.inputs.news_id }}.mp4
+          ffmpeg -framerate 30 -pattern_type glob -i "frames/frame_*.jpg" -c:v libx264 -pix_fmt yuv420p -r 30 out/news_video_${{ github.event.inputs.news_id }}.mp4
 
       - name: Upload video artifact
         uses: actions/upload-artifact@v4
