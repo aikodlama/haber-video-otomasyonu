@@ -31,14 +31,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
+      - name: Install ffmpeg
         run: |
-          pip install pillow requests
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
@@ -47,63 +41,10 @@ jobs:
           mkdir -p out
           curl -L -o out/news_image.jpg "${{ github.event.inputs.image_url }}" || curl -L -o out/news_image.jpg "https://cdnassets.aa.com.tr/assets/images/aalogomin.png"
 
-      - name: Create video frames with Python
+      - name: Create simple video from image
         run: |
-          mkdir -p frames
-          python3 << 'EOF'
-          from PIL import Image, ImageDraw, ImageFont
-          import textwrap
-          import os
-
-          # Get inputs
-          title = """${{ github.event.inputs.title }}"""
-          description = """${{ github.event.inputs.description }}"""
-          
-          # Truncate long text
-          if len(title) > 100:
-              title = title[:97] + "..."
-          if len(description) > 200:
-              description = description[:197] + "..."
-
-          # Create title frame
-          img = Image.new('RGB', (1920, 1080), color='#1a1a2e')
-          draw = ImageDraw.Draw(img)
-          
-          # Use default font
-          try:
-              font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
-              font_desc = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 32)
-          except:
-              font_title = ImageFont.load_default()
-              font_desc = ImageFont.load_default()
-
-          # Wrap and draw title
-          wrapped_title = textwrap.fill(title, width=40)
-          draw.text((960, 540), wrapped_title, fill='white', font=font_title, anchor='mm', align='center')
-          img.save('frames/frame_001.jpg')
-
-          # Create description frame
-          img2 = Image.new('RGB', (1920, 1080), color='#16213e')
-          draw2 = ImageDraw.Draw(img2)
-          wrapped_desc = textwrap.fill(description, width=50)
-          draw2.text((960, 540), wrapped_desc, fill='white', font=font_desc, anchor='mm', align='center')
-          img2.save('frames/frame_002.jpg')
-          
-          print("Frames created successfully")
-          EOF
-          
-          # Copy news image as frame 3
-          cp out/news_image.jpg frames/frame_003.jpg
-          
-          # Create duplicate frames for 5 seconds each at 30fps (150 frames each)
-          for frame_num in ["001", "002", "003"]:
-              for i in range(1, 151):
-                  cp frames/frame_${frame_num}.jpg frames/frame_${frame_num}_$(printf "%03d" $i).jpg
-          done
-
-      - name: Generate video with ffmpeg
-        run: |
-          ffmpeg -framerate 30 -pattern_type glob -i "frames/frame_*.jpg" -c:v libx264 -pix_fmt yuv420p -r 30 out/news_video_${{ github.event.inputs.news_id }}.mp4
+          # Create a 15-second video from the news image with fade effects
+          ffmpeg -loop 1 -i out/news_image.jpg -c:v libx264 -t 15 -pix_fmt yuv420p -vf "fade=t=in:st=0:d=1,fade=t=out:st=14:d=1,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2" out/news_video_${{ github.event.inputs.news_id }}.mp4
 
       - name: Upload video artifact
         uses: actions/upload-artifact@v4
@@ -114,7 +55,14 @@ jobs:
 
       - name: Save video info
         run: |
-          echo '{"news_id": "${{ github.event.inputs.news_id }}", "title": "${{ github.event.inputs.title }}", "news_url": "${{ github.event.inputs.news_url }}", "created_at": "'$(date -Iseconds)'"}' > out/video_info_${{ github.event.inputs.news_id }}.json
+          cat > out/video_info_${{ github.event.inputs.news_id }}.json << 'EOF'
+          {
+            "news_id": "${{ github.event.inputs.news_id }}",
+            "title": "${{ github.event.inputs.title }}",
+            "news_url": "${{ github.event.inputs.news_url }}",
+            "created_at": "$(date -Iseconds)"
+          }
+          EOF
 
       - name: Upload video info
         uses: actions/upload-artifact@v4
